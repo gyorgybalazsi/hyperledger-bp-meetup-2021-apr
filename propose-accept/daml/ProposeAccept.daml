@@ -1,0 +1,58 @@
+module ProposeAccept where
+
+import Daml.Script
+
+-- **********************  CONTRACT TEMPLATES  ***************************
+
+template Proposal 
+  with 
+    partyA : Party  -- proposer
+    partyB : Party  -- accepter 
+    partyC : Party  -- observer
+  where
+    signatory partyA 
+    observer partyC
+    controller partyB can 
+      Proposal_Accept : ContractId Agreement 
+        do 
+          create Agreement with .. 
+          -- .. is shorthand for ...
+ 
+
+template Agreement 
+  with 
+    partyA : Party 
+    partyB : Party
+  where 
+    signatory partyA, partyB
+    agreement show partyA <> " and " <> show partyB <> " are good friends." 
+    controller partyA can 
+      Agreement_Archive_A : ()
+        do 
+          return () 
+    controller partyB can 
+      Agreement_Archive_B : ()
+        do 
+          return () 
+
+
+-- ***************** SCRIPT FOR TESTING THE PACKAGE *****************
+
+setup : Script ()
+setup = script do
+  alice <- allocateParty "Alice" 
+  bob <- allocateParty "Bob" 
+  carol <- allocateParty "Carol"
+
+  let 
+    partyA = alice
+    partyB = bob
+    partyC = carol
+
+  proposalCid <- submit alice $ createCmd Proposal with .. 
+  -- `with ..` is shorthand for `with partyA = partyA, partyB = partyB` 
+  agreementCid <- submit bob $ exerciseCmd proposalCid Proposal_Accept 
+
+  submit alice $ exerciseCmd agreementCid Agreement_Archive_A
+
+  pure ()

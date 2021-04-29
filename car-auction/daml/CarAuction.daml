@@ -1,0 +1,238 @@
+module CarAuction where 
+import Daml.Script 
+import DA.List
+
+-- ***********************  CUSTOM DATA TYPES  ***********************
+
+data VehicleListingStatus = FOR_SALE | SOLD 
+  deriving (Eq, Show) 
+
+data Offer = Offer 
+  with
+    bidder : Member  
+    bidPrice : Int 
+      deriving (Eq, Show)
+
+-- *********************  PARTICIPANT CONTRACTS  ***********************
+
+template Member 
+    with
+        participant : Party 
+        email : Text
+        firstName : Text 
+        lastName : Text 
+        balance : Int 
+    where 
+        signatory participant
+        key participant : Party
+        maintainer key
+        ensure balance >= 0
+
+template Auctioneer 
+    with 
+        participant : Party 
+        email : Text
+        firstName : Text 
+        lastName : Text 
+    where 
+        signatory participant
+
+-- ***************************  ASSET CONTRACTS ******************************
+
+template Vehicle
+  with 
+    vin : Text 
+    description : Text 
+    owner : Party 
+  where 
+    signatory owner -- IRL THE DMV WOULD ALSO BE A SIGNATORY
+
+    -- OWNER CAN LIST VEHICLE BY CREATING A VEHICLE LISTING
+
+    controller owner can 
+      nonconsuming Vehicle_ListVehicle : ContractId VehicleListingProposal
+        with 
+          listingId : Text 
+          reservePrice : Int 
+          invitedBidders : [Party] 
+          auctioneer : Party
+        do 
+          assertMsg "You cannot invite yourself for bidding" $ notElem owner invitedBidders
+          visible <- visibleByKey @VehicleListing (owner, vin)
+          assertMsg "Vehicle already listed" $ not visible
+          create VehicleListingProposal 
+            with 
+              vehicle = this 
+              ..
+
+template VehicleListingProposal 
+  with
+    listingId : Text 
+    reservePrice : Int -- RESERVE PRICE FOR BIDDING
+    vehicle : Vehicle 
+    invitedBidders : [Party]
+    auctioneer : Party
+  where 
+    signatory vehicle.owner -- OWNER CAN REVOKE (ARCHIVE) PROPOSAL
+    controller auctioneer can 
+      VehicleListingProposal_Accept : ContractId VehicleListing
+        do 
+          create VehicleListing with 
+              offers = []
+              state = FOR_SALE 
+              .. 
+
+template VehicleListing 
+  with 
+    listingId : Text 
+    reservePrice : Int -- RESERVE PRICE FOR BIDDING
+    state : VehicleListingStatus 
+    vehicle : Vehicle 
+    invitedBidders : [Party]
+    auctioneer : Party
+    offers : [Offer] -- LIST OF BIDS (OFFERS)
+  where 
+    signatory vehicle.owner, auctioneer -- OWNER CANNOT REVOKE (ARCHIVE) LISTING
+    observer invitedBidders
+    key (vehicle.owner, vehicle.vin) : (Party, Text)
+    maintainer key._1
+
+    -- MEMBERS CAN BID ON THE VEHICLE
+
+    choice VehicleListing_Offer : ContractId VehicleListing 
+      with 
+        bidderParty : Party
+        bidPrice : Int 
+      controller bidderParty
+      do 
+        (_, bidderData) <- fetchByKey @Member bidderParty
+        assertMsg "Bidder must have been invited" $ elem bidderParty invitedBidders
+        assertMsg "You must have sufficient balance" $ bidderData.balance >= bidPrice
+        assertMsg "You must meet reservePrice" $ bidPrice >= reservePrice 
+
+        --  SUBMITTED OFFER GETS ADDED TO THE LIST OF OFFERS
+
+        let offer = Offer with bidder = bidderData, ..
+
+        create this with offers = offer :: offers 
+
+    -- AUCTIONEER CAN CLOSE BIDDING
+
+    controller auctioneer can 
+      VehicleListing_CloseBidding : ContractId WinningOffer
+        do 
+          assertMsg "There are no valid offers" $ not $ null offers 
+          create this with state = SOLD 
+
+          -- FUNCTION COMPUTES THE WINNER BID
+          -- In Daml we don't have loops, we use a recursively defined reducer function applied on the list of bids instead
+
+          let winningOffer = foldl1 (\offer1 offer2 -> if offer2.bidPrice >= offer1.bidPrice then offer2 else offer1) offers
+          create WinningOffer 
+            with 
+              auctioneer
+              offer = winningOffer
+          
+template WinningOffer 
+  with 
+    auctioneer : Party 
+    offer : Offer 
+  where 
+    signatory auctioneer 
+
+-- ****************************************** TEST SCRIPT *************************************************
+
+test : Script ()
+test = do 
+
+  -- PARTICIPANTS
+
+  auctioneerParty <- allocateParty "Jenny_Jones_auctioneer"
+  memberAParty <- allocateParty "Amy_Williams_member"
+  memberBParty <- allocateParty "Billy_Thompson_member"
+  memberCParty <- allocateParty "Charlie_Chaplin_member"
+
+  submit auctioneerParty $ createCmd Auctioneer 
+    with 
+      participant = auctioneerParty
+      email = "auction@acme.org"
+      firstName = "Jenny"
+      lastName = "Jones"        
+
+  submit memberAParty $ createCmd Member
+    with
+          participant = memberAParty
+          email = "memberA@acme.org"
+          firstName = "Amy"
+          lastName = "Willliams" 
+          balance = 5000
+
+  submit memberBParty $ createCmd Member 
+    with 
+      participant = memberBParty
+      email = "memberB@acme.org"
+      firstName = "Billy"
+      lastName = "Thompson" 
+      balance = 5000 
+  
+  submit memberCParty $ createCmd Member 
+    with 
+      participant = memberCParty
+      email = "memberC@acme.org"
+      firstName = "Charlie"
+      lastName = "Chaplin" 
+      balance = 5000
+
+  -- ASSESTS
+  
+  vehicle <- submit memberAParty $ createCmd Vehicle 
+    with 
+      vin = "vin:1234"
+      description = "Arium Nova"
+      owner = memberAParty
+
+  -- LISTING
+  listingProposal <- submit memberAParty $ exerciseCmd vehicle Vehicle_ListVehicle
+                with 
+                  listingId = "listingId:ABCD" 
+                  reservePrice = 2000 
+                  invitedBidders = [memberBParty, memberCParty] 
+                  auctioneer = auctioneerParty 
+
+  listing <- submit auctioneerParty $ exerciseCmd listingProposal VehicleListingProposal_Accept
+
+  -- OWNER CANNOT ARCHIVE LISTING 
+
+  submitMustFail memberAParty $ archiveCmd listing
+
+  -- MEMBER A CANNOT CREATE ANOTHER LISTING FOR THE SAME VEHICLE
+  submitMustFail memberAParty $ exerciseCmd vehicle Vehicle_ListVehicle
+                with 
+                  listingId = "listingId:EFGH" 
+                  reservePrice = 3000 
+                  invitedBidders = [memberBParty, memberCParty] 
+                  auctioneer = auctioneerParty 
+
+  -- BIDDING
+
+  -- MEMBER B DIDN'T MEET THE RESERVE PRICE
+  submitMustFail memberBParty $ exerciseCmd listing VehicleListing_Offer
+    with bidderParty = memberBParty, bidPrice = 1800 -- Didn't meet reserve price
+
+  -- MEMBER B'S BID MODIFIED THE LISTING CONTRACT
+  listing <- submit memberBParty $ exerciseCmd listing VehicleListing_Offer
+    with bidderParty = memberBParty, bidPrice = 4000
+
+  -- MEMBER C'S BID MODIFIED THE LISTING CONTRACT
+  listing <- submit memberCParty $ exerciseCmd listing VehicleListing_Offer
+    with bidderParty = memberCParty, bidPrice = 3500
+
+  -- AUCTIONEER CLOSES THE BID, WINNNG OFFER CONTRACT GETS CREATED, LISTING STATUS "SOLD"
+  submit auctioneerParty $ exerciseCmd listing VehicleListing_CloseBidding
+
+  return ()
+
+
+
+
+
