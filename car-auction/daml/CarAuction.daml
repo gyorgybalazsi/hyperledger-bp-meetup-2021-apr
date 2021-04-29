@@ -215,17 +215,23 @@ setup = do
 
   -- BIDDING
 
+  -- This is an open bidding, members can see each other's offers, and can make offers several times.
+
   -- MEMBER B DIDN'T MEET THE RESERVE PRICE
   submitMustFail memberBParty $ exerciseCmd listing VehicleListing_Offer
     with bidderParty = memberBParty, bidPrice = 1800 -- Didn't meet reserve price
 
   -- MEMBER B'S BID MODIFIED THE LISTING CONTRACT
   listing <- submit memberBParty $ exerciseCmd listing VehicleListing_Offer
-    with bidderParty = memberBParty, bidPrice = 4000
+    with bidderParty = memberBParty, bidPrice = 2000
 
   -- MEMBER C'S BID MODIFIED THE LISTING CONTRACT
   listing <- submit memberCParty $ exerciseCmd listing VehicleListing_Offer
     with bidderParty = memberCParty, bidPrice = 3500
+
+  -- MEMBER B'S BID MODIFIED THE LISTING CONTRACT
+  listing <- submit memberBParty $ exerciseCmd listing VehicleListing_Offer
+    with bidderParty = memberBParty, bidPrice = 4000
 
   -- AUCTIONEER CLOSES THE BID, WINNNG OFFER CONTRACT GETS CREATED, LISTING STATUS "SOLD"
   submit auctioneerParty $ exerciseCmd listing VehicleListing_CloseBidding
