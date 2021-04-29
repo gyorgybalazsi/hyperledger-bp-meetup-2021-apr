@@ -6,8 +6,10 @@ name: car-auction
 source: daml
 init-script: Main:setup
 parties:
-  - Alice
-  - Bob
+  - Jenny_Jones_auctioneer
+  - Amy_Williams_member
+  - Billy_Thompson_member
+  - Charlie_Chaplin_member
 version: 0.0.1
 dependencies:
   - daml-prim

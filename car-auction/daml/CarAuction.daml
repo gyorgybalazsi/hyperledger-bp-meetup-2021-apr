@@ -105,10 +105,12 @@ template VehicleListing
         bidPrice : Int 
       controller bidderParty
       do 
-        (_, bidderData) <- fetchByKey @Member bidderParty
+        assertMsg "Car already sold" $ state == FOR_SALE
         assertMsg "Bidder must have been invited" $ elem bidderParty invitedBidders
-        assertMsg "You must have sufficient balance" $ bidderData.balance >= bidPrice
         assertMsg "You must meet reservePrice" $ bidPrice >= reservePrice 
+
+        (_, bidderData) <- fetchByKey @Member bidderParty
+        assertMsg "You must have sufficient balance" $ bidderData.balance >= bidPrice
 
         --  SUBMITTED OFFER GETS ADDED TO THE LIST OF OFFERS
 
@@ -142,8 +144,8 @@ template WinningOffer
 
 -- ****************************************** TEST SCRIPT *************************************************
 
-test : Script ()
-test = do 
+setup : Script ()
+setup = do 
 
   -- PARTICIPANTS
 
